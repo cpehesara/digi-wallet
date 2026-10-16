@@ -1,0 +1,769 @@
+{
+  "info": {
+    "name": "Wallet: Stage 5 Resilience & Layer-3 Idempotency",
+    "description": "Postman version of requests-resilience.http with automatic checks. Needs wallet-service running on port 8080. Use Run collection to execute everything in order.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "walletId",
+      "value": ""
+    },
+    {
+      "key": "runId",
+      "value": "manual"
+    },
+    {
+      "key": "chargeId1",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Setup",
+      "item": [
+        {
+          "name": "0. Setup: create a wallet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "create-{{runId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets"
+              ]
+            },
+            "description": "Creates a wallet and stores walletId. Run this first (or run the whole collection).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"ownerName\": \"Postman Tester\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('runId', String(Date.now())); // fresh keys on every run, so you can re-run the collection"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const id = pm.response.json().walletId;",
+                  "pm.test('walletId returned', () => pm.expect(id).to.be.a('string'));",
+                  "pm.collectionVariables.set('walletId', id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "0b. Setup: provider healthy (0% failures)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mock-provider/chaos?failPercent=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mock-provider",
+                "chaos"
+              ],
+              "query": [
+                {
+                  "key": "failPercent",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('failPercent is 0', () => pm.expect(pm.response.json().failPercent).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "A. Layer-3 idempotency (same key, one charge)",
+      "item": [
+        {
+          "name": "1. Card top-up (charge provider, credit wallet once)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "card-{{runId}}-001"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/{{walletId}}/card-topups",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletId}}",
+                "card-topups"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 2500}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('first call is NOT a replay', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('false'));",
+                  "const b = pm.response.json();",
+                  "pm.test('chargeId present', () => pm.expect(b.chargeId).to.be.a('string'));",
+                  "pm.test('balance is 2500', () => pm.expect(b.balanceMinor).to.eql(2500));",
+                  "pm.collectionVariables.set('chargeId1', b.chargeId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. SAME key again -> replayed, same chargeId",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "card-{{runId}}-001"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/{{walletId}}/card-topups",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletId}}",
+                "card-topups"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 2500}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('header Idempotent-Replayed: true', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));",
+                  "pm.test('same chargeId as request 1', () => pm.expect(pm.response.json().chargeId).to.eql(pm.collectionVariables.get('chargeId1')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2b. Proof: wallet was credited exactly once",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/{{walletId}}/balance",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletId}}",
+                "balance"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('balance is still 2500 (not 5000)', () => pm.expect(pm.response.json().balanceMinor).to.eql(2500));",
+                  "pm.test('only one ledger event (lastSeq = 1)', () => pm.expect(pm.response.json().lastSeq).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "B. Flaky provider: retries with backoff + jitter",
+      "item": [
+        {
+          "name": "3. Make provider flaky (60% of calls fail)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mock-provider/chaos?failPercent=60",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mock-provider",
+                "chaos"
+              ],
+              "query": [
+                {
+                  "key": "failPercent",
+                  "value": "60"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('failPercent is 60', () => pm.expect(pm.response.json().failPercent).to.eql(60));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.1 Flaky top-up (new key, retries; 201 or 503 both valid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "card-{{runId}}-flaky-001"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/{{walletId}}/card-topups",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletId}}",
+                "card-topups"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 100}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 (succeeded after retries) or 503 (gave up / breaker open)', () => pm.expect([201, 503]).to.include(pm.response.code));",
+                  "if (pm.response.code === 503) {",
+                  "  pm.test('503 body explains why', () => pm.expect(pm.response.json().error).to.eql('PROVIDER_UNAVAILABLE'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.2 Flaky top-up (new key, retries; 201 or 503 both valid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "card-{{runId}}-flaky-002"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/{{walletId}}/card-topups",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletId}}",
+                "card-topups"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 100}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 (succeeded after retries) or 503 (gave up / breaker open)', () => pm.expect([201, 503]).to.include(pm.response.code));",
+                  "if (pm.response.code === 503) {",
+                  "  pm.test('503 body explains why', () => pm.expect(pm.response.json().error).to.eql('PROVIDER_UNAVAILABLE'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.3 Flaky top-up (new key, retries; 201 or 503 both valid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "card-{{runId}}-flaky-003"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/{{walletId}}/card-topups",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletId}}",
+                "card-topups"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 100}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 (succeeded after retries) or 503 (gave up / breaker open)', () => pm.expect([201, 503]).to.include(pm.response.code));",
+                  "if (pm.response.code === 503) {",
+                  "  pm.test('503 body explains why', () => pm.expect(pm.response.json().error).to.eql('PROVIDER_UNAVAILABLE'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. Circuit breaker state",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/provider-status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "provider-status"
+              ]
+            },
+            "description": "CLOSED -> OPEN after repeated failures -> HALF_OPEN after 10 s."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('state is CLOSED, OPEN or HALF_OPEN', () => pm.expect(['CLOSED','OPEN','HALF_OPEN']).to.include(pm.response.json().circuitBreaker));",
+                  "console.log('Breaker state: ' + pm.response.json().circuitBreaker);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Provider charged each key only once",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mock-provider/stats",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mock-provider",
+                "stats"
+              ]
+            },
+            "description": "Retries reuse the same Idempotency-Key, so the provider records one charge per key."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('distinctCharges is a number >= 1', () => pm.expect(pm.response.json().distinctCharges).to.be.at.least(1));",
+                  "console.log('distinctCharges = ' + pm.response.json().distinctCharges + ' (one per key, however many retries)');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "C. Provider down: circuit breaker fails fast",
+      "item": [
+        {
+          "name": "7. Provider down for good (100% failures)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mock-provider/chaos?failPercent=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mock-provider",
+                "chaos"
+              ],
+              "query": [
+                {
+                  "key": "failPercent",
+                  "value": "100"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('failPercent is 100', () => pm.expect(pm.response.json().failPercent).to.eql(100));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7b. Top-up while provider is down -> 503",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "card-{{runId}}-down-001"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/{{walletId}}/card-topups",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletId}}",
+                "card-topups"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 100}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('503 Service Unavailable', () => pm.response.to.have.status(503));",
+                  "pm.test('error is PROVIDER_UNAVAILABLE', () => pm.expect(pm.response.json().error).to.eql('PROVIDER_UNAVAILABLE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7c. Breaker should now be OPEN (calls fail fast)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/provider-status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "provider-status"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('breaker is OPEN (or HALF_OPEN if 10 s passed)', () => pm.expect(['OPEN','HALF_OPEN']).to.include(pm.response.json().circuitBreaker));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "D. Recovery",
+      "item": [
+        {
+          "name": "8. Back to normal (0% failures)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mock-provider/chaos?failPercent=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mock-provider",
+                "chaos"
+              ],
+              "query": [
+                {
+                  "key": "failPercent",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('failPercent is 0', () => pm.expect(pm.response.json().failPercent).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8b. Recovery: top-up works again (waits 11 s for HALF_OPEN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "card-{{runId}}-recover-001"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/{{walletId}}/card-topups",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "{{walletId}}",
+                "card-topups"
+              ]
+            },
+            "description": "If this fails with 503, the 10 s wait had not finished; send it again.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 100}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Postman delay: the breaker stays OPEN for 10 s, then moves to HALF_OPEN and lets test calls through.",
+                  "setTimeout(function () {}, 11000);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created: breaker closed again', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8c. Breaker closed again",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/provider-status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "wallets",
+                "provider-status"
+              ]
+            },
+            "description": "After 2 successful half-open calls it closes. If it shows HALF_OPEN, send one more top-up first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('breaker is CLOSED', () => pm.expect(pm.response.json().circuitBreaker).to.eql('CLOSED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

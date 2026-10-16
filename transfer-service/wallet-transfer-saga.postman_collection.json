@@ -1,0 +1,593 @@
+{
+  "info": {
+    "name": "IT3133 Wallet: Transfer Saga checks",
+    "description": "Start docker compose, wallet-service (:8080) then transfer-service (:8081). Run the whole collection with the Collection Runner (in order).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Setup (creates wallets A and B)",
+      "item": [
+        {
+          "name": "S1. Create wallet A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('walletA', pm.response.json().walletId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{walletBase}}/wallets",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"ownerName\": \"Postman A\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "S2. Create wallet B",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('walletB', pm.response.json().walletId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{walletBase}}/wallets",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"ownerName\": \"Postman B\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "S3. Top up wallet A with 1000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('balance is 1000', () => pm.expect(pm.response.json().balanceMinor).to.eql(1000));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{walletBase}}/wallets/{{walletA}}/topups",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 1000}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transfer saga checks",
+      "item": [
+        {
+          "name": "1. Transfer 400 from A to B (202 Accepted)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('transferKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "const j = pm.response.json();",
+                  "pm.test('state is PENDING', () => pm.expect(j.state).to.eql('PENDING'));",
+                  "pm.test('first call is not a replay', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('false'));",
+                  "pm.collectionVariables.set('transferId', j.transferId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{transferKey}}"
+              }
+            ],
+            "url": "{{transferBase}}/transfers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"fromWalletId\": \"{{walletA}}\", \"toWalletId\": \"{{walletB}}\", \"amountMinor\": 400}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The saga runs in the background."
+          }
+        },
+        {
+          "name": "2. SAME request again (replay, money moves once)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('same transferId as request 1', () => pm.expect(pm.response.json().transferId).to.eql(pm.collectionVariables.get('transferId')));",
+                  "pm.test('Idempotent-Replayed is true', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{transferKey}}"
+              }
+            ],
+            "url": "{{transferBase}}/transfers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"fromWalletId\": \"{{walletA}}\", \"toWalletId\": \"{{walletB}}\", \"amountMinor\": 400}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2b. Same key, DIFFERENT amount (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 key reused', () => pm.response.to.have.status(422));",
+                  "pm.test('error code', () => pm.expect(pm.response.json().error).to.eql('IDEMPOTENCY_KEY_REUSED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{transferKey}}"
+              }
+            ],
+            "url": "{{transferBase}}/transfers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"fromWalletId\": \"{{walletA}}\", \"toWalletId\": \"{{walletB}}\", \"amountMinor\": 999}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3. Check saga state (waits for COMPLETED)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Wait (up to 30 s) until the saga reaches a final state, so the next request can assert on it.",
+                  "const base = pm.collectionVariables.get('transferBase');",
+                  "const id = pm.collectionVariables.get('transferId');",
+                  "const done = ['COMPLETED', 'FAILED', 'COMPENSATED', 'MANUAL_REVIEW'];",
+                  "let tries = 0;",
+                  "function poll() {",
+                  "  pm.sendRequest(base + '/transfers/' + id, function (err, res) {",
+                  "    tries++;",
+                  "    if (!err && res.code === 200 && done.includes(res.json().state)) return;",
+                  "    if (tries >= 30) return;",
+                  "    setTimeout(poll, 1000);",
+                  "  });",
+                  "}",
+                  "poll();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('state is COMPLETED', () => pm.expect(pm.response.json().state).to.eql('COMPLETED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{transferBase}}/transfers/{{transferId}}"
+          }
+        },
+        {
+          "name": "3b. Wallet A balance after transfer (600)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('A = 600', () => pm.expect(pm.response.json().balanceMinor).to.eql(600));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{walletBase}}/wallets/{{walletA}}/balance"
+          }
+        },
+        {
+          "name": "3c. Wallet B balance after transfer (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('B = 400', () => pm.expect(pm.response.json().balanceMinor).to.eql(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{walletBase}}/wallets/{{walletB}}/balance"
+          }
+        },
+        {
+          "name": "4a. Insufficient funds: start transfer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.collectionVariables.set('transferIdFail', pm.response.json().transferId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{transferBase}}/transfers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"fromWalletId\": \"{{walletA}}\", \"toWalletId\": \"{{walletB}}\", \"amountMinor\": 99999999}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4b. Insufficient funds: state is FAILED",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Wait (up to 30 s) until the saga reaches a final state, so the next request can assert on it.",
+                  "const base = pm.collectionVariables.get('transferBase');",
+                  "const id = pm.collectionVariables.get('transferIdFail');",
+                  "const done = ['COMPLETED', 'FAILED', 'COMPENSATED', 'MANUAL_REVIEW'];",
+                  "let tries = 0;",
+                  "function poll() {",
+                  "  pm.sendRequest(base + '/transfers/' + id, function (err, res) {",
+                  "    tries++;",
+                  "    if (!err && res.code === 200 && done.includes(res.json().state)) return;",
+                  "    if (tries >= 30) return;",
+                  "    setTimeout(poll, 1000);",
+                  "  });",
+                  "}",
+                  "poll();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('state is FAILED', () => pm.expect(pm.response.json().state).to.eql('FAILED'));",
+                  "pm.test('reason mentions funds', () => pm.expect(String(pm.response.json().failure_reason)).to.include('Insufficient'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{transferBase}}/transfers/{{transferIdFail}}"
+          }
+        },
+        {
+          "name": "5a. Missing destination wallet: start transfer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.collectionVariables.set('transferIdComp', pm.response.json().transferId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{transferBase}}/transfers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"fromWalletId\": \"{{walletA}}\", \"toWalletId\": \"00000000-0000-0000-0000-000000000000\", \"amountMinor\": 100}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "5b. Missing destination wallet: state is COMPENSATED (refund)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Wait (up to 30 s) until the saga reaches a final state, so the next request can assert on it.",
+                  "const base = pm.collectionVariables.get('transferBase');",
+                  "const id = pm.collectionVariables.get('transferIdComp');",
+                  "const done = ['COMPLETED', 'FAILED', 'COMPENSATED', 'MANUAL_REVIEW'];",
+                  "let tries = 0;",
+                  "function poll() {",
+                  "  pm.sendRequest(base + '/transfers/' + id, function (err, res) {",
+                  "    tries++;",
+                  "    if (!err && res.code === 200 && done.includes(res.json().state)) return;",
+                  "    if (tries >= 30) return;",
+                  "    setTimeout(poll, 1000);",
+                  "  });",
+                  "}",
+                  "poll();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('state is COMPENSATED', () => pm.expect(pm.response.json().state).to.eql('COMPENSATED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{transferBase}}/transfers/{{transferIdComp}}"
+          }
+        },
+        {
+          "name": "6a. Wallet A balance is still 600 after refund",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('A = 600', () => pm.expect(pm.response.json().balanceMinor).to.eql(600));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{walletBase}}/wallets/{{walletA}}/balance"
+          }
+        },
+        {
+          "name": "6b. Wallet A ledger events (4 expected)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const ev = pm.response.json();",
+                  "pm.test('4 events: top-up, debit 400, debit 100, refund 100', () => pm.expect(ev.length).to.eql(4));",
+                  "pm.test('types in order', () => pm.expect(ev.map(e => e.type)).to.eql(['Credited', 'Debited', 'Debited', 'Credited']));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{walletBase}}/wallets/{{walletA}}/events"
+          }
+        },
+        {
+          "name": "6c. Balance rebuilt from events equals the projection",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('consistent', () => pm.expect(pm.response.json().consistent).to.eql(true));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{walletBase}}/wallets/{{walletA}}/balance/replay"
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "walletBase",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "transferBase",
+      "value": "http://localhost:8081"
+    },
+    {
+      "key": "walletA",
+      "value": ""
+    },
+    {
+      "key": "walletB",
+      "value": ""
+    },
+    {
+      "key": "transferKey",
+      "value": ""
+    },
+    {
+      "key": "transferId",
+      "value": ""
+    },
+    {
+      "key": "transferIdFail",
+      "value": ""
+    },
+    {
+      "key": "transferIdComp",
+      "value": ""
+    }
+  ]
+}

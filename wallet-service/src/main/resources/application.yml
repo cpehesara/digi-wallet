@@ -1,0 +1,33 @@
+spring:
+  application:
+    name:wallet-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/wallet
+    username: wallet
+    password: wallet
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    listener:
+      simple:
+        default-requeue-rejected: false
+        retry:
+          enable: true
+          max-attempts: 3
+          initial-interval: 500ms
+          multiplier: 2
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+
+logging:
+  pattern:
+    level: "%5p [trace=%X{traceId:-}]"
