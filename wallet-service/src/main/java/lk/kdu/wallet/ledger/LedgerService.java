@@ -46,7 +46,6 @@ public class LedgerService {
         long seq = current.lastSeq() + 1;
         UUID eventId = UUID.randomUUID();
 
-
         jdbc.update("INSERT INTO ledger_events (event_id, wallet_id, seq, type, amount_minor, trace_id) "
                         + "VALUES (?, ?, ?, ?, ?, ?)",
                 eventId, walletId, seq, type, amountMinor, traceId);

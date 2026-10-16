@@ -21,7 +21,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
-import org.slf4j.MDC;
 
 import java.util.List;
 import java.util.Map;
@@ -106,7 +105,7 @@ public class WalletController {
         requireKey(key);
         String scope = "POST /wallets/" + walletId + "/" + action;
         String hash = RequestHasher.sha256(scope + "|" + req.amountMinor());
-        String trace = MDC.get("traceId") != null ? MDC.get("traceId") : cleanTrace(traceHeader);
+        String trace = cleanTrace(traceHeader);
         Stored out = ConflictRetry.run(MAX_RETRIES, () -> executor.execute(scope, key, hash, () -> {
             LedgerService.EntryResult r = ledger.append(walletId, type, req.amountMinor(), trace);
             return new Stored(201,
