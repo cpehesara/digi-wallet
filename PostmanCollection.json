@@ -1,0 +1,740 @@
+{
+  "info": {
+    "name": "Idempotent Wallet - Viva Demo (IT3133)",
+    "description": "Run with the Collection Runner in order (Run manually, delay 500 ms). Every request has tests; green = the claim holds. Needs wallet-service on :8080, PostgreSQL and RabbitMQ running.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 Setup",
+      "item": [
+        {
+          "name": "0.1 Create wallet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "create-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"ownerName\": \"Pehesara\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('runId', Date.now().toString());",
+                  "pm.collectionVariables.set('expected', 0);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('wallet created', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
+                  "pm.collectionVariables.set('wallet', pm.response.json().walletId);",
+                  "console.log('wallet = ' + pm.collectionVariables.get('wallet'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 Layer 1: API idempotency",
+      "item": [
+        {
+          "name": "1.1 Top up 1000 (first time)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "topup-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/topups",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 1000}"
+            },
+            "description": "First time: the key is claimed, the effect runs, the receipt is stored."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('Idempotent-Replayed: false', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('false'));",
+                  "pm.collectionVariables.set('expected', Number(pm.collectionVariables.get('expected')||0) + 1000);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 SAME request again (double click)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "topup-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/topups",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 1000}"
+            },
+            "description": "Same key, same payload: the stored receipt is returned, nothing is credited twice."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('same status as the original (201)', () => pm.response.to.have.status(201));",
+                  "pm.test('Idempotent-Replayed: true', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Same key, DIFFERENT amount",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "topup-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/topups",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 9999}"
+            },
+            "description": "A reused key with a different payload is a client bug, so we fail loudly."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 key reuse rejected', () => pm.response.to.have.status(422));",
+                  "pm.test('error code IDEMPOTENCY_KEY_REUSED', () => pm.expect(pm.response.text()).to.include('IDEMPOTENCY_KEY_REUSED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.4 No Idempotency-Key at all",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/topups",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 100}"
+            },
+            "description": "Rejected before the executor runs."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 missing key', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.5 Withdraw more than the balance",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "wd-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/withdrawals",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 999999}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 insufficient funds', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.6 Balance (must equal expected)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/balance"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('balance equals expected money (nothing doubled)', () => pm.expect(j.balanceMinor).to.eql(Number(pm.collectionVariables.get('expected'))));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 Lost response (the core story)",
+      "item": [
+        {
+          "name": "2.1 Switch ON: drop the response",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/admin/chaos?dropResponse=true"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('chaos on', () => pm.expect(pm.response.code).to.be.oneOf([200,204]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 Top up 500: you get 503 but the money DID move",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "lost-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/topups",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 500}"
+            },
+            "description": "The server committed, then the reply was lost. The client cannot tell."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('client sees a failure (503)', () => pm.response.to.have.status(503));",
+                  "pm.collectionVariables.set('expected', Number(pm.collectionVariables.get('expected')||0) + 500);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.3 Switch OFF",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/admin/chaos?dropResponse=false"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('chaos off', () => pm.expect(pm.response.code).to.be.oneOf([200,204]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.4 RETRY the same key: replayed, no second credit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "lost-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/topups",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 500}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 from the stored receipt', () => pm.response.to.have.status(201));",
+                  "pm.test('Idempotent-Replayed: true', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.5 Balance: 1500, not 2000",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/balance"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('balance equals expected money (nothing doubled)', () => pm.expect(j.balanceMinor).to.eql(Number(pm.collectionVariables.get('expected'))));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 Parallel storm: 50 identical requests",
+      "item": [
+        {
+          "name": "3.1 Create a fresh wallet for the storm",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "storm-wallet-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"ownerName\": \"storm\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('stormWallet', pm.response.json().walletId);",
+                  "pm.test('storm wallet created', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.2 50 identical requests at once, then read the balance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{stormWallet}}/balance",
+            "description": "If this request shows odd numbers, run `k6 run k6/duplicates.js` as the backup proof."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Fire 50 IDENTICAL top-ups (same key) at the same instant, then count the answers.",
+                  "const base = pm.collectionVariables.get('baseUrl');",
+                  "const wallet = pm.collectionVariables.get('stormWallet');",
+                  "const key = 'storm-' + pm.collectionVariables.get('runId');",
+                  "let created = 0, replayed = 0, other = 0, done = 0;",
+                  "const N = 50;",
+                  "for (let i = 0; i < N; i++) {",
+                  "  pm.sendRequest({",
+                  "    url: base + '/wallets/' + wallet + '/topups', method: 'POST',",
+                  "    header: { 'Content-Type': 'application/json', 'Idempotency-Key': key },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({ amountMinor: 1000 }) }",
+                  "  }, (err, res) => {",
+                  "    done++;",
+                  "    if (err || !res) { other++; }",
+                  "    else if (res.code === 201 && res.headers.get('Idempotent-Replayed') === 'true') { replayed++; }",
+                  "    else if (res.code === 201) { created++; }",
+                  "    else { other++; }",
+                  "    if (done === N) {",
+                  "      pm.collectionVariables.set('stormCreated', created);",
+                  "      pm.collectionVariables.set('stormReplayed', replayed);",
+                  "      pm.collectionVariables.set('stormOther', other);",
+                  "    }",
+                  "  });",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('balance is exactly 1000 (one effect)', () => pm.expect(j.balanceMinor).to.eql(1000));",
+                  "pm.test('exactly 1 request did the work', () => pm.expect(Number(pm.collectionVariables.get('stormCreated'))).to.eql(1));",
+                  "pm.test('49 answers were replays', () => pm.expect(Number(pm.collectionVariables.get('stormReplayed'))).to.eql(49));",
+                  "console.log('created=' + pm.collectionVariables.get('stormCreated') + ' replayed=' + pm.collectionVariables.get('stormReplayed') + ' other=' + pm.collectionVariables.get('stormOther'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 Layer 2: duplicate broker messages (inbox)",
+      "item": [
+        {
+          "name": "4.1 Switch ON: relay publishes every message twice",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/admin/chaos?duplicatePublish=true"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('chaos on', () => pm.expect(pm.response.code).to.be.oneOf([200,204]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.2 Top up 200 (watch the app log: 'Duplicate message ... skipped')",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "dup-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/topups",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 200}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('expected', Number(pm.collectionVariables.get('expected')||0) + 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.3 Metric: duplicates suppressed (tag layer=inbox)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/actuator/metrics/wallet.duplicates.suppressed"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(function(){}, 2500); // let the relay (runs every second) publish"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('metric exists', () => pm.response.to.have.status(200));",
+                  "console.log(pm.response.text());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.4 Switch OFF",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/admin/chaos?duplicatePublish=false"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('chaos off', () => pm.expect(pm.response.code).to.be.oneOf([200,204]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 Poison message (optional)",
+      "item": [
+        {
+          "name": "5.1 Switch ON: consumer always fails (poison message)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/admin/chaos?failConsumer=true"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('chaos on', () => pm.expect(pm.response.code).to.be.oneOf([200,204]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.2 Top up 300, then open http://localhost:15672 -> wallet.events.notification.dlq",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "poison-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/topups",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"amountMinor\": 300}"
+            },
+            "description": "The money is safe even though the notification consumer keeps failing."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('API still succeeds (201)', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('expected', Number(pm.collectionVariables.get('expected')||0) + 300);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.3 Switch OFF",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/admin/chaos?failConsumer=false"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('chaos off', () => pm.expect(pm.response.code).to.be.oneOf([200,204]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6 Proof: ledger and replay",
+      "item": [
+        {
+          "name": "6.1 Ledger history (append-only events)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/events"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('events returned', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6.2 Replay: balance rebuilt from events equals the stored balance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/balance/replay"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('consistent = true', () => pm.expect(j.consistent).to.eql(true));",
+                  "pm.test('replayed balance equals expected', () => pm.expect(j.replayedBalanceMinor).to.eql(Number(pm.collectionVariables.get('expected'))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6.3 Final balance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{wallet}}/balance"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('balance equals expected money (nothing doubled)', () => pm.expect(j.balanceMinor).to.eql(Number(pm.collectionVariables.get('expected'))));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "wallet",
+      "value": ""
+    },
+    {
+      "key": "stormWallet",
+      "value": ""
+    },
+    {
+      "key": "runId",
+      "value": "0"
+    },
+    {
+      "key": "expected",
+      "value": "0"
+    }
+  ]
+}
